@@ -11,13 +11,18 @@ Simple 3-step auth
 
 ```
 C: HELLO <C's RSA PUB>
-S: HELLO_FRIEND <S's RSA PUB>
+S: HELLO_FRIEND <S's RSA PUB> <Session Key>
 
-C: LOOKIE Enc<Random Integer, i>
-S: I_LOOKED Enc<i+1> Enc<Random Integer, j>
+C: LOOKIE Enc<Random Integer, i> <Sesson Key>
+S: I_LOOKED Enc<i+1> NOW_U Enc<Random Integer, j>
 
-C: I_LOOKED Enc<j+1>
+C: I_LOOKED Enc<j+1> <Session Key>
+
+on success:
 S: WE_COOL
+
+on faliure:
+S: NO_FAM
 ```
 
 ##Main Client
