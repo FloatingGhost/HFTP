@@ -9,6 +9,7 @@ import cgi
 import random
 import string
 import binascii
+import glob
 
 from floatingutils.conf import YamlConf
 from floatingutils.log  import Log
@@ -22,17 +23,21 @@ PORT = config.getValue("server", "port")
 log.info("Loading RSA keys...")
 keydir = os.path.expanduser("~/.hftpd")
 
+
 rand = random.Random()
 
 try:
   if not os.path.exists(keydir):
     log.info("{} does not exist. Creating...".format(keydir))
     os.mkdir(keydir)
+    os.system("touch {}/known_hosts".format(keydir))
     raise FileNotFoundError
   with open("{}/private.pem".format(keydir), "r") as f:
     PRIVATE_KEY = rsa.PrivateKey.load_pkcs1(f.read())
   with open("{}/public.pem".format(keydir), "r") as f:
     PUBLIC_KEY = rsa.PublicKey.load_pkcs1(f.read())
+  with open("{}/known_hosts".format(keydir), "rb") as f:
+    known_hosts = pickle.load(f)
 except FileNotFoundError as e:
   log.info("Could not find one of your keys -- {}".format(e))
   log.info("Generating keys...")
@@ -47,10 +52,11 @@ except FileNotFoundError as e:
 log.info("Keys succesfully loaded.")
 
 class Session:
-  def __init__(self, ip, pubkey, sessionkey):
+  def __init__(self, ip, pubkey, sessionkey, username):
     self.ip = ip 
     self.pubkey = rsa.PublicKey.load_pkcs1(pubkey)
     self.sessionkey = sessionkey
+    self.username = username 
 
   def encrypt(self, msg):
     return str(rsa.encrypt(msg, self.pubkey), 'utf-8')
@@ -110,26 +116,43 @@ class HFTPD(BaseHTTPRequestHandler):
       post[i] = form.getvalue(i)
       log.info("  {} : '{}'".format(i, form.getvalue(i)))
     log.line("+")
-    resp = 100
-    msg = "REQUEST NOT RECOGNISED"
+    
+    if self.path == "/auth":
+      resp = 100
+      msg = "REQUEST NOT RECOGNISED"
 
-    if post["request"] == "HELLO":
-      resp,msg = self.do_AUTH(post["pubkey"])
-    else:
-      log.debug(sessions)
-      if not post["session"] in sessions:
-        #Deny access
-        self.send_response(100)
-        self.send_header("content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(self.fmt("ACCESS DENIED - AUTH FIRST"))
-        return
+      if post["request"] == "HELLO":
+        resp,msg = self.do_AUTH(post["pubkey"], post["username"])
+      else:
+        log.debug(sessions)
+        if not post["session"] in sessions:
+          #Deny access
+          self.send_response(100)
+          self.send_header("content-type", "text/plain")
+          self.end_headers()
+          self.wfile.write(self.fmt("ACCESS DENIED - AUTH FIRST"))
+          return
       
-    if post["request"] == "LOOKIE":
-      resp,msg = self.do_HANDSHAKE(post["number"], post["session"])
+      if post["request"] == "LOOKIE":
+        resp,msg = self.do_HANDSHAKE(post["number"], post["session"])
 
-    if post["request"] == "I_LOOKED":
-      resp,msg = self.do_FINALIZE(post["number"], post["session"])
+      if post["request"] == "I_LOOKED":
+        resp,msg = self.do_FINALIZE(post["number"], post["session"])
+
+    
+    if self.path == "/ftp":
+      resp = 200
+      cmd = post["request"]
+      if cmd == "LS":
+        msg = self.do_LS(post["session"])
+      elif cmd == "PULL":
+        msg = self.do_PULL(post["arg"], post["session"])
+      elif cmd == "PUSH":
+        msg = self.do_PUSH(post["arg"], post["file"], post["session"])
+      else:
+        msg = "Command not recognised"
+
+        
 
     self.send_response(resp)
 
@@ -142,11 +165,32 @@ class HFTPD(BaseHTTPRequestHandler):
     
     return 
 
-  def do_AUTH(self, key=None):
+  def do_LS(self, key):
+    return "\n".join(glob.glob("*"))
+
+  def do_PUSH(self, filename, file, key):
+    pass
+
+  def do_PULL(self, filename, key):
+    try:
+      with open(filename, "r") as f:
+        x= "-----FILE FOLLOWS-----\n"
+        x += filename + "\n"
+        for i in f.read().strip().split("\n"):
+          x+= str(binascii.hexlify(rsa.encrypt(bytes(i, 'utf-8'), sessions[key].getPub())))[2:-1] + "\n"
+        return x + "-----END FILE-----"
+    except FileNotFoundError:
+      return "ERROR: File Not Found"
+
+  def do_AUTH(self, key, username):
     if not key:
       return 100, "NO FRIEND THAT IS NOT A KEY"
+    ##Check it matches what we have
+    #if not (username,key) in known_hosts:
+    #  return 200, "I DON'T RECOGNISE YOU FRIEND"
+
     newkey = genSessionKey()
-    sessions[newkey] = Session(self.client_address[0], key, newkey)
+    sessions[newkey] = Session(self.client_address[0], key, newkey, username)
     return 200, "HELLO_FRIEND\t\n{}\t\n{}".format(str(PUBLIC_KEY.save_pkcs1(), 'utf-8'),
                                               newkey)
 

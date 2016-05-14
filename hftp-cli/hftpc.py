@@ -13,6 +13,7 @@ log = Log()
 
 parser = argparse.ArgumentParser(description='Connect to a HFTP server.')
 
+parser.add_argument("username", help="Your username")
 parser.add_argument('host', help='The address of the server')
 parser.add_argument('--port', default=9072,
                     help='The port to access')
@@ -21,7 +22,7 @@ parser.add_argument("--keydir", default=os.path.expanduser("~/.hftp"),
 
 args = parser.parse_args()
 
-log.info("Using Server {}:{}".format(args.host, args.port))
+log.info("Using Server {}@{}:{}".format(args.username, args.host, args.port))
 log.info("Using {}".format(args.keydir))
 
 
@@ -51,6 +52,7 @@ sock = "http://{}:{}".format(args.host, args.port)
 log.info("Connecting to {}...".format(sock))
 
 r = requests.post("{}/auth".format(sock), data = {"request":"HELLO",
+                                        "username":args.username,
                                         "pubkey":str(PUBLIC_KEY.save_pkcs1(), 'utf-8')})
 
 resp = r.text
@@ -113,3 +115,42 @@ else:
   log.error("The server rejected us :(")
   sys.exit(1)
 
+#mainloop
+while True:
+  log.line()
+  print("\n\n")
+  action = input("HFTP@{} :: ".format(args.host)).strip()
+  #Possible:
+  #PUT, GET, LS, CD
+  try:
+    cmd, sep, arg = action.partition(" ")
+  except ValueError:
+    cmd = action
+    arg = ""
+
+  f = None
+  if cmd.lower() == "push":
+    try:
+      with open(arg.partition(" ")[0], "r") as g:
+        f = g.read()
+    except FileNotFoundError:
+      pass
+    except ValueError:
+      pass
+  
+  r = requests.post("{}/ftp".format(sock), data = {
+                      "request": cmd.upper(),
+                      "arg": arg,
+                      "file": f,
+                      "session": session_key
+                    })
+  r = r.text.split("\n")
+  print("\n\n{}\n\n".format(r))
+  if "FILE FOLLOWS" in r[0]:
+    with open(r[1], "w") as f:
+      for i in r[2:]:
+        if "END FILE" in i:
+          break
+        else:
+          i = str(rsa.decrypt(binascii.unhexlify(i), PRIVATE_KEY))[2:-1]
+          f.write(i + "\n")
