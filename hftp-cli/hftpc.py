@@ -5,6 +5,7 @@ import sys
 import os
 import random
 import binascii
+from rsa.bigfile import *
 
 from floatingutils.log import Log
 
@@ -117,7 +118,6 @@ else:
 
 #mainloop
 while True:
-  log.line()
   print("\n\n")
   action = input("HFTP@{} :: ".format(args.host)).strip()
   #Possible:
@@ -131,8 +131,11 @@ while True:
   f = None
   if cmd.lower() == "push":
     try:
-      with open(arg.partition(" ")[0], "r") as g:
-        f = g.read()
+      with open(arg.partition(" ")[0], "rb") as a, open("tmp", "wb") as b:
+        encrypt_bigfile(a, b, SERV_KEY)
+      with open("tmp", "rb") as g:
+        f = str(binascii.hexlify(g.read()))
+        print("\nSending {} -- Excerpt: {}",format(arg.partition(" ")[0], f[:5]))
     except FileNotFoundError:
       pass
     except ValueError:
@@ -145,12 +148,17 @@ while True:
                       "session": session_key
                     })
   r = r.text.split("\n")
-  print("\n\n{}\n\n".format(r))
   if "FILE FOLLOWS" in r[0]:
-    with open(r[1], "w") as f:
-      for i in r[2:]:
-        if "END FILE" in i:
-          break
-        else:
-          i = str(rsa.decrypt(binascii.unhexlify(i), PRIVATE_KEY))[2:-1]
-          f.write(i + "\n")
+    print("\n\n")
+    log.info("Recieving file {}...".format(r[1]))
+    
+    encfile = r[2]
+    print(encfile)
+    with open("tmp", "wb") as f:
+      f.write(binascii.unhexlify(str(encfile)[2:-1]))
+    with open("tmp", "rb") as i, open(r[1], "wb") as o:
+      decrypt_bigfile(i, o, PRIVATE_KEY)
+
+    log.info("{} Saved!".format(r[1]))
+  else:
+    print("\n\n{}\n\n".format("\n".join(r)))

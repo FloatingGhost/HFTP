@@ -10,6 +10,7 @@ import random
 import string
 import binascii
 import glob
+from rsa.bigfile import *
 
 from floatingutils.conf import YamlConf
 from floatingutils.log  import Log
@@ -169,15 +170,26 @@ class HFTPD(BaseHTTPRequestHandler):
     return "\n".join(glob.glob("*"))
 
   def do_PUSH(self, filename, file, key):
-    pass
+    log.info("Recieving File {}".format(filename))
+    with open("tmp", "wb") as f:
+      f.write(binascii.unhexlify(file[2:-1]))
+    with open("tmp", "rb") as i, open(filename, "wb") as o:
+      decrypt_bigfile(i, o, PRIVATE_KEY)
+    log.info("Recieved succesfully") 
+    return "OK"
 
   def do_PULL(self, filename, key):
     try:
-      with open(filename, "r") as f:
+      with open(filename, "rb") as inf, open(filename+".rsa-enc", "wb") as out:
+        encrypt_bigfile(inf, 
+                        out, 
+                        sessions[key].getPub()
+                                )
+
+      with open(filename + ".rsa-enc", "rb") as f:
         x= "-----FILE FOLLOWS-----\n"
         x += filename + "\n"
-        for i in f.read().strip().split("\n"):
-          x+= str(binascii.hexlify(rsa.encrypt(bytes(i, 'utf-8'), sessions[key].getPub())))[2:-1] + "\n"
+        x += str(binascii.hexlify(f.read())) + "\n"
         return x + "-----END FILE-----"
     except FileNotFoundError:
       return "ERROR: File Not Found"
