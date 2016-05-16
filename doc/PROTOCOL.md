@@ -9,20 +9,28 @@ eProtocol Definition
 
 Simple 3-step auth
 
+`endpoint: http://address.of.server/auth`
 ```
-C: HELLO <C's RSA PUB>
-S: HELLO_FRIEND <S's RSA PUB> <Session Key>
+All sent via POST to end endpoint
 
-C: LOOKIE Enc<Random Integer, i> <Sesson Key>
-S: I_LOOKED Enc<i+1> NOW_U Enc<Random Integer, j>
+C:  REQUEST: HELLO 
+    RSA_KEY: <C's RSA PUB>
 
-C: I_LOOKED Enc<j+1> <Session Key>
+S:  ACK: HELLO_FRIEND 
+    RSA_PUBLIC: <S's RSA PUB>
+    SESSION_KEY: <Session Key>
+    AUTH_CHALLENGE: Enc<Rand Integer, i>
 
-on success:
-S: WE_COOL
+C:  REQUEST: AUTH_CONFIRM
+    CHALLENGE_ANSWER: Enc<i+1>
+    AUTH_CHALLENGE: Enc<Rand Integer, j> 
+    SESSION_KEY: <Sesson Key>
+
+S:  ACK: SERV_IDENT
+    CHALLENGE_ANSWER Enc<j+1>
 
 on faliure:
-S: NO_FAM
+S:  ACK: FAILED
 ```
 
 ##Main Client

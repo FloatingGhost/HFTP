@@ -1,0 +1,3 @@
+[submodule "Python-Utilities"]
+	path = Python-Utilities
+	url = git@github.com:FloatingGhost/Python-Utilities.git

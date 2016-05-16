@@ -8,6 +8,10 @@ import binascii
 from rsa.bigfile import *
 
 from floatingutils.log import Log
+from floatingutils.network.encryption import *
+from floatingutils.network.client import Client
+
+key = LocalKeys()
 
 log = Log()
 
@@ -24,101 +28,53 @@ parser.add_argument("--keydir", default=os.path.expanduser("~/.hftp"),
 args = parser.parse_args()
 
 log.info("Using Server {}@{}:{}".format(args.username, args.host, args.port))
-log.info("Using {}".format(args.keydir))
-
-
-try:
-  if not os.path.exists(args.keydir):
-    log.info("{} does not exist. Creating...".format(args.keydir))
-    os.mkdir(args.keydir)
-    raise FileNotFoundError
-  with open("{}/private.pem".format(args.keydir), "r") as f:
-    PRIVATE_KEY = rsa.PrivateKey.load_pkcs1(f.read())
-  with open("{}/public.pem".format(args.keydir), "r") as f:
-    PUBLIC_KEY = rsa.PublicKey.load_pkcs1(f.read())
-except FileNotFoundError as e:
-  log.info("Could not find one of your keys -- {}".format(e))
-  log.info("Generating keys...")
-  PUBLIC_KEY,PRIVATE_KEY = rsa.newkeys(512)
-  log.info("Saving keys to {}".format(args.keydir))
-
-  with open("{}/private.pem".format(args.keydir), "w") as f:
-    f.write(str(PRIVATE_KEY.save_pkcs1(), 'utf-8'))
-  with open("{}/public.pem".format(args.keydir), "w") as f:
-    f.write(str(PUBLIC_KEY.save_pkcs1(), 'utf-8'))
-
-log.info("Keys succesfully loaded.")
-
 sock = "http://{}:{}".format(args.host, args.port)
-log.info("Connecting to {}...".format(sock))
 
-r = requests.post("{}/auth".format(sock), data = {"request":"HELLO",
-                                        "username":args.username,
-                                        "pubkey":str(PUBLIC_KEY.save_pkcs1(), 'utf-8')})
+cli = Client(args.host, args.port)
 
-resp = r.text
-try:
-  auth_resp,srv_key,session_key = resp.split("\t\n")
-except ValueError:
-  log.error("Server response was invalid")
-  log.error("We got\n{}".format(resp))
-  sys.exit(1)
-
-if auth_resp != "HELLO_FRIEND":
-  log.error("The server responded with some weird auth string")
-  log.error("I wouldn't recommend connecting to it")
-  log.error(resp)
-  sys.exit(1)
-
-log.info("Recieved server key, checking it is who it says it is")
-
-SERV_KEY = rsa.PublicKey.load_pkcs1(srv_key)
-
-rand = random.Random()
-
-VERIFICATION_INTEGER = rand.randint(1, 1000000)
-enc = rsa.encrypt(bytes(str(VERIFICATION_INTEGER), 'utf-8'), SERV_KEY)
-enc = binascii.hexlify(enc)
-r = requests.post("{}/auth".format(sock), data = {"request":"LOOKIE", 
-                                                  "number":enc,
-                                                  "session":session_key}
-                  )
-resp = (r.text).split("\t\n")
-if resp[0] == "DECRYPTION FAILED - CHECK IT ALL PLS":
-  log.error("Server could not decrypt.")
-  log.error("It says we sent {}".format(bytes(resp[1], 'utf-8')))
-  sys.exit(1)
-else:
-  plusone = resp[1][2:-1]
-  number = int(rsa.decrypt(binascii.unhexlify(plusone), PRIVATE_KEY))
-  if number != VERIFICATION_INTEGER+1:
-    log.error("Server sent back the wrong number!")
-    sys.exit(1)
-  log.info("Server authenticated itself to us...")
-
-assert(resp[2] == "NOW_U")
-
-server_integer = binascii.unhexlify(resp[3][2:-1])
-server_integer = int(rsa.decrypt(server_integer, PRIVATE_KEY))
-
-addone = server_integer+1
-addone = binascii.hexlify(rsa.encrypt(bytes(str(addone),'utf-8'), SERV_KEY))
-
-r = requests.post("{}/auth".format(sock), data = {
-                                             "request":"I_LOOKED",
-                                             "session":session_key,
-                                             "number":addone}
+r = cli.post("auth", data = {"REQUEST":"HELLO",
+                             "USERNAME":args.username,
+                             "RSA_KEY":key.getNetworkPublic() 
+                            }
             )
 
-if r.text == "WE_COOL":
-  log.info("Server has accepted our credentials!")
-else:
-  log.error("The server rejected us :(")
+
+log.debug("Initial handshake...")
+assert(r["ACK"] == "HELLO_FRIEND")
+
+challenge = key.networkDecrypt(r["AUTH_CHALLENGE"])
+answer = key.networkEncrypt(str(int(challenge)+1), cli.getServerPub())
+
+rand = random.Random()
+challeng_int = rand.randint(1, 10000000)
+my_challenge = key.networkEncrypt(str(challeng_int), cli.getServerPub())
+
+r = cli.post("auth", data = {"REQUEST":"AUTH_CONFIRM",
+                             "CHALLENGE_ANSWER":answer,
+                             "AUTH_CHALLENGE":my_challenge
+                            }
+            )
+log.debug("Finalizing authentication...")
+try:
+  assert(r["ACK"] == "SERV_IDENT")
+except AssertionError:
+  log.error("Server rejected auth!")
   sys.exit(1)
+
+serv_challenge = key.networkDecrypt(r["CHALLENGE_ANSWER"])
+
+try:
+  assert(int(serv_challenge) == challeng_int+1)
+except AssertionError: 
+  log.error("Server failed to authenticate itself!")
+  sys.exit(1)
+
+log.info("Server Connection Successful.\n")
+
 
 #mainloop
 while True:
-  print("\n\n")
+  print("\n")
   action = input("HFTP@{} :: ".format(args.host)).strip()
   #Possible:
   #PUT, GET, LS, CD
@@ -128,37 +84,45 @@ while True:
     cmd = action
     arg = ""
 
-  f = None
-  if cmd.lower() == "push":
-    try:
-      with open(arg.partition(" ")[0], "rb") as a, open("tmp", "wb") as b:
-        encrypt_bigfile(a, b, SERV_KEY)
-      with open("tmp", "rb") as g:
-        f = str(binascii.hexlify(g.read()))
-        print("\nSending {} -- Excerpt: {}",format(arg.partition(" ")[0], f[:5]))
-    except FileNotFoundError:
-      pass
-    except ValueError:
-      pass
-  
-  r = requests.post("{}/ftp".format(sock), data = {
-                      "request": cmd.upper(),
-                      "arg": arg,
-                      "file": f,
-                      "session": session_key
-                    })
-  r = r.text.split("\n")
-  if "FILE FOLLOWS" in r[0]:
-    print("\n\n")
-    log.info("Recieving file {}...".format(r[1]))
-    
-    encfile = r[2]
-    print(encfile)
-    with open("tmp", "wb") as f:
-      f.write(binascii.unhexlify(str(encfile)[2:-1]))
-    with open("tmp", "rb") as i, open(r[1], "wb") as o:
-      decrypt_bigfile(i, o, PRIVATE_KEY)
+  cmd = cmd.upper()
 
-    log.info("{} Saved!".format(r[1]))
-  else:
-    print("\n\n{}\n\n".format("\n".join(r)))
+  if cmd not in ["PUSH", "PULL"]:
+    r= cli.post("command", data={
+                "CMD":cmd,
+                "ARGS":arg,
+                             }
+              ) 
+    if r["STATUS"] == "OK":
+      print(r["OUTPUT"])
+    else:
+      print("Could not run: {}".format(r["OUTPUT"])) 
+  elif cmd == "PULL":
+    r = cli.post("command", data={
+          "CMD":"PULL",
+          "FILENAME":arg
+                                  }
+        )
+
+    if r["STATUS"] == "OK":
+      key.decryptFile(r["FILE_DATA"][2:-1], arg, True)
+      print("Server Says: {}".format(r["OUTPUT"]))
+    else:
+      print("Server Error: {}".format(r["OUTPUT"]))
+
+  elif cmd == "PUSH":
+    try:
+      print(cli.getServerPub())
+      data = key.encryptFile(arg, cli.getServerPub(), True)
+      r= cli.post("command", data={
+                  "CMD":"PUSH",
+                  "FILENAME": arg,
+                  "FILE_DATA": data
+                             }
+                 )
+      assert (r["STATUS"] == "OK")
+      print("Server Says: {}".format(r["OUTPUT"]))
+
+    except FileNotFoundError:
+      print("Client Error: FILE NOT FOUND")
+    except AssertionError:
+      print("Server Error: {}".format(r["OUTPUT"]))
