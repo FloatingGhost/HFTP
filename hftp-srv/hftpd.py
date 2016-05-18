@@ -17,6 +17,7 @@ from floatingutils.conf import YamlConf
 from floatingutils.log  import Log
 from floatingutils.network.server import * 
 from floatingutils.network.encryption import *
+from floatingutils.network.errors import *
 
 log = Log()
 config = YamlConf("hftpd.conf")
@@ -36,7 +37,8 @@ class HFTPD(Server):
 
 def cmdPath(session, postvals):
   if session.getAuthState() != 1:
-    return {"STATUS":"FAIL", "OUTPUT":"NOT AUTHENTICATED"}
+    return {"STATUS":"FAIL", "CODE": code("ACCESS_DENIED"),
+            "OUTPUT":"NOT AUTHENTICATED"}
 
   cmd = postvals["CMD"]
   log.info(cmd)  
@@ -52,7 +54,8 @@ def cmdPath(session, postvals):
                                                       filename)
             }   
     except FileNotFoundError:
-      return {"STATUS":"FAIL", "OUTPUT":"FILE NOT FOUND"}
+      return {"STATUS":"FAIL", "CODE":code("FILE_NOT_FOUND"),
+               "OUTPUT":"FILE '{}' NOT FOUND".format(filename)}
  
   if cmd == "PUSH":
     filename = postvals["FILENAME"]

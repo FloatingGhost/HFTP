@@ -5,11 +5,13 @@ import sys
 import os
 import random
 import binascii
+import subprocess
 from rsa.bigfile import *
 
 from floatingutils.log import Log
 from floatingutils.network.encryption import *
 from floatingutils.network.client import Client
+from floatingutils.network.errors import *
 
 key = LocalKeys()
 
@@ -40,8 +42,11 @@ r = cli.post("auth", data = {"REQUEST":"HELLO",
 
 
 log.debug("Initial handshake...")
-assert(r["ACK"] == "HELLO_FRIEND")
-
+try:
+  assert(r["ACK"] == "HELLO_FRIEND")
+except KeyError:
+  print("{}".format(errorDesc(r["CODE"])))
+  sys.exit(1)
 challenge = key.networkDecrypt(r["AUTH_CHALLENGE"])
 answer = key.networkEncrypt(str(int(challenge)+1), cli.getServerPub())
 
@@ -86,7 +91,7 @@ while True:
 
   cmd = cmd.upper()
 
-  if cmd not in ["PUSH", "PULL"]:
+  if cmd not in ["PUSH", "PULL", "HELP", "LSL"]:
     r= cli.post("command", data={
                 "CMD":cmd,
                 "ARGS":arg,
@@ -105,13 +110,14 @@ while True:
 
     if r["STATUS"] == "OK":
       key.decryptFile(r["FILE_DATA"][2:-1], arg, True)
+      
       print("Server Says: {}".format(r["OUTPUT"]))
     else:
+      print("{}".format(errorDesc(r["CODE"])))
       print("Server Error: {}".format(r["OUTPUT"]))
 
   elif cmd == "PUSH":
     try:
-      print(cli.getServerPub())
       data = key.encryptFile(arg, cli.getServerPub(), True)
       r= cli.post("command", data={
                   "CMD":"PUSH",
@@ -126,3 +132,18 @@ while True:
       print("Client Error: FILE NOT FOUND")
     except AssertionError:
       print("Server Error: {}".format(r["OUTPUT"]))
+  elif cmd == "LSL":
+    p = subprocess.Popen(["ls"], stdout=subprocess.PIPE)
+    out,err = p.communicate()
+    print(str(out, 'utf-8')) 
+ 
+  elif cmd == "HELP":
+    print("""
+HFTP HELP
+=========
+
+LS              -- List files on the remote system
+LSL             -- List local files
+PUSH [filename] -- Upload a file onto the remote
+PULL [filename] -- Download a file
+""")
