@@ -93,7 +93,7 @@ def cmdPath(session, postvals):
                "OUTPUT":"FILE '{}' NOT FOUND".format(filename)}
  
   if cmd == "PUSH":
-    filename = postvals["FILENAME"]
+    filename = postvals["FILENAME"].split("/")[-1]
     data = postvals["FILE_DATA"]
     log.info(data)
     keyd.decryptFile(data, filename, True)
